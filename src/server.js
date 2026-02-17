@@ -7,11 +7,19 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-const transport = new StreamableHTTPServerTransport({
-  // Stateless mode is better for serverless environments.
-  sessionIdGenerator: undefined,
-});
-const connectPromise = server.connect(transport);
+let transport;
+let connectPromise;
+
+function getTransport() {
+  if (!transport) {
+    transport = new StreamableHTTPServerTransport({
+      // Stateless mode is better for serverless environments.
+      sessionIdGenerator: undefined,
+    });
+    connectPromise = server.connect(transport);
+  }
+  return { transport, connectPromise };
+}
 
 function getRequestPath(req) {
   const rawUrl = req?.url || "/";
@@ -169,6 +177,7 @@ server.tool(
 
 export async function handleMcpHttpRequest(req, res) {
   try {
+    const { transport, connectPromise } = getTransport();
     await connectPromise;
     const path = getRequestPath(req);
 
