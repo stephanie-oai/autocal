@@ -13,6 +13,34 @@ const transport = new StreamableHTTPServerTransport({
 });
 const connectPromise = server.connect(transport);
 
+function getRequestPath(req) {
+  const rawUrl = req?.url || "/";
+  try {
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+      return new URL(rawUrl).pathname;
+    }
+  } catch {
+    // Fall through to lightweight parsing.
+  }
+  const qIndex = rawUrl.indexOf("?");
+  return qIndex >= 0 ? rawUrl.slice(0, qIndex) : rawUrl;
+}
+
+function getParsedBody(req) {
+  const body = req?.body;
+  if (body === undefined || body === null || body === "") {
+    return undefined;
+  }
+  if (typeof body === "string") {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return undefined;
+    }
+  }
+  return body;
+}
+
 function getConfig() {
   return {
     webAppUrl: process.env.GCAL_WEBAPP_URL || "",
@@ -142,10 +170,17 @@ server.tool(
 export async function handleMcpHttpRequest(req, res) {
   try {
     await connectPromise;
+    const path = getRequestPath(req);
 
-    if (req.method === "GET" && (req.url === "/health" || req.url === "/api/health")) {
+    if (req.method === "GET" && (path === "/health" || path === "/api/health")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, service: "personal-calendar-mcp" }));
+      return;
+    }
+
+    if (req.method === "HEAD") {
+      res.writeHead(200);
+      res.end();
       return;
     }
 
@@ -169,8 +204,20 @@ export async function handleMcpHttpRequest(req, res) {
       return;
     }
 
-    await transport.handleRequest(req, res);
+    if (!["GET", "POST", "DELETE"].includes(req.method || "")) {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+
+    const parsedBody = req.method === "POST" ? getParsedBody(req) : undefined;
+    await transport.handleRequest(req, res, parsedBody);
   } catch (err) {
+    console.error("MCP handler error", {
+      method: req?.method,
+      url: req?.url,
+      error: err instanceof Error ? err.stack || err.message : String(err),
+    });
     if (!res.headersSent) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
