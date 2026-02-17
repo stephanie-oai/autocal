@@ -2,23 +2,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
-const server = new McpServer({
-  name: "personal-calendar-mcp",
-  version: "0.1.0",
-});
-
-let transport;
-let connectPromise;
-
-function getTransport() {
-  if (!transport) {
-    transport = new StreamableHTTPServerTransport({
-      // Stateless mode is better for serverless environments.
-      sessionIdGenerator: undefined,
-    });
-    connectPromise = server.connect(transport);
-  }
-  return { transport, connectPromise };
+function createServer() {
+  return new McpServer({
+    name: "personal-calendar-mcp",
+    version: "0.1.0",
+  });
 }
 
 function getRequestPath(req) {
@@ -103,82 +91,89 @@ async function postToWebApp(eventPayload) {
   return parsed;
 }
 
-server.tool(
-  "google_calendar_create_event",
-  "Create one Google Calendar event through the configured Apps Script web app.",
-  {
-    summary: z.string().min(1),
-    startDateTime: z.string().describe("ISO 8601 datetime, for example 2026-03-21T19:00:00+00:00"),
-    endDateTime: z.string().describe("ISO 8601 datetime, for example 2026-03-21T23:00:00+00:00"),
-    timeZone: z.string().optional(),
-    location: z.string().optional(),
-    description: z.string().optional(),
-    emojiPrefix: z.string().optional(),
-    disableEmojiPrefix: z.boolean().optional(),
-    calendarId: z.string().optional(),
-    attendees: z.array(z.object({ email: z.string().email() })).optional(),
-    sendInvites: z.boolean().optional(),
-  },
-  async (args) => {
-    const config = getConfig();
-    const event = {
-      summary: args.summary,
-      location: args.location || "",
-      description: args.description || "",
-      start: {
-        dateTime: args.startDateTime,
-        timeZone: args.timeZone || config.defaultTimezone,
-      },
-      end: {
-        dateTime: args.endDateTime,
-        timeZone: args.timeZone || config.defaultTimezone,
-      },
-      reminders: {
-        useDefault: false,
-        overrides: [],
-      },
-      calendarId: args.calendarId || config.defaultCalendarId,
-    };
-    if (args.emojiPrefix) {
-      event.emojiPrefix = args.emojiPrefix;
-    }
-    if (typeof args.disableEmojiPrefix === "boolean") {
-      event.disableEmojiPrefix = args.disableEmojiPrefix;
-    }
-    if (args.attendees?.length) {
-      event.attendees = args.attendees;
-    }
-    if (typeof args.sendInvites === "boolean") {
-      event.sendInvites = args.sendInvites;
-    }
+function registerTools(server) {
+  server.tool(
+    "google_calendar_create_event",
+    "Create one Google Calendar event through the configured Apps Script web app.",
+    {
+      summary: z.string().min(1),
+      startDateTime: z.string().describe("ISO 8601 datetime, for example 2026-03-21T19:00:00+00:00"),
+      endDateTime: z.string().describe("ISO 8601 datetime, for example 2026-03-21T23:00:00+00:00"),
+      timeZone: z.string().optional(),
+      location: z.string().optional(),
+      description: z.string().optional(),
+      emojiPrefix: z.string().optional(),
+      disableEmojiPrefix: z.boolean().optional(),
+      calendarId: z.string().optional(),
+      attendees: z.array(z.object({ email: z.string().email() })).optional(),
+      sendInvites: z.boolean().optional(),
+    },
+    async (args) => {
+      const config = getConfig();
+      const event = {
+        summary: args.summary,
+        location: args.location || "",
+        description: args.description || "",
+        start: {
+          dateTime: args.startDateTime,
+          timeZone: args.timeZone || config.defaultTimezone,
+        },
+        end: {
+          dateTime: args.endDateTime,
+          timeZone: args.timeZone || config.defaultTimezone,
+        },
+        reminders: {
+          useDefault: false,
+          overrides: [],
+        },
+        calendarId: args.calendarId || config.defaultCalendarId,
+      };
+      if (args.emojiPrefix) {
+        event.emojiPrefix = args.emojiPrefix;
+      }
+      if (typeof args.disableEmojiPrefix === "boolean") {
+        event.disableEmojiPrefix = args.disableEmojiPrefix;
+      }
+      if (args.attendees?.length) {
+        event.attendees = args.attendees;
+      }
+      if (typeof args.sendInvites === "boolean") {
+        event.sendInvites = args.sendInvites;
+      }
 
-    const result = await postToWebApp(event);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      isError: result.ok !== true,
-    };
-  }
-);
+      const result = await postToWebApp(event);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        isError: result.ok !== true,
+      };
+    }
+  );
 
-server.tool(
-  "google_calendar_post_raw_event",
-  "Post a raw event payload directly to the configured Apps Script web app.",
-  {
-    event: z.object({}).passthrough(),
-  },
-  async (args) => {
-    const result = await postToWebApp(args.event);
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      isError: result.ok !== true,
-    };
-  }
-);
+  server.tool(
+    "google_calendar_post_raw_event",
+    "Post a raw event payload directly to the configured Apps Script web app.",
+    {
+      event: z.object({}).passthrough(),
+    },
+    async (args) => {
+      const result = await postToWebApp(args.event);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        isError: result.ok !== true,
+      };
+    }
+  );
+}
 
 export async function handleMcpHttpRequest(req, res) {
   try {
-    const { transport, connectPromise } = getTransport();
-    await connectPromise;
+    const server = createServer();
+    registerTools(server);
+    const transport = new StreamableHTTPServerTransport({
+      // Stateless mode is better for serverless environments.
+      sessionIdGenerator: undefined,
+    });
+    await server.connect(transport);
     const path = getRequestPath(req);
 
     if (req.method === "GET" && (path === "/health" || path === "/api/health")) {
